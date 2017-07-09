@@ -4,7 +4,6 @@
 Ws2812::Ws2812(uint8_t num, uint16_t outputPin) {
 
 	pin = outputPin;
-
 	begun = false;
 
 	if(pixels) free(pixels);
@@ -26,12 +25,10 @@ void Ws2812::begin(void) {
 		return;
 	}
   SPI.begin();
-  SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
-
-  //pinMode(pin, OUTPUT);
+  SPI.beginTransaction(SPISettings(3000000, MSBFIRST, SPI_MODE1));
 
 	begun = true;
-
+ 
 }
 
 void Ws2812::show() {
@@ -39,28 +36,29 @@ void Ws2812::show() {
 
   int Index;
   uint32_t Encoding=0;
-  uint8_t SPI_Data[numLEDs*10];
+  uint8_t SPI_Data[numLEDs*9];
   uint32_t SPI_index = 0;
+  uint8_t *p;
+  uint8_t green;
+  uint8_t red;
+  uint8_t blue;
+  uint32_t colour;
   
 	for(int i = 0; i < numLEDs; i++) {
 
-    uint8_t *p;
-
     p = &pixels[i * 3];
 
-    uint8_t green = p[0];//10;//p[0];
-    uint8_t red = p[1];//10;//p[1];
-    uint8_t blue = p[2];//244;//p[2];
-
-    uint32_t colour = ((green << 16) + (red << 8) + blue);
+    green = p[0];
+    red   = p[1];
+    blue  = p[2];
     
     // Process the GREEN byte
-    Index=0;
-    Encoding=0;
+    Index = 0;
+    Encoding = 0;
     while (Index < 8)
     {
         Encoding = Encoding << 3;
-        if (colour & BIT23)
+        if (green & BIT7)
         {
             Encoding |= 0b110;
         }
@@ -68,10 +66,10 @@ void Ws2812::show() {
         {
             Encoding |= 0b100;
         }
-        colour = colour << 1;
-        Index++;
-        
-    }    
+        green = green << 1;
+        Index++;        
+    }   
+     
     SPI_Data[SPI_index++] = ((Encoding >> 16) & 0xff);
     SPI_Data[SPI_index++] = ((Encoding >> 8) & 0xff);
     SPI_Data[SPI_index++] = (Encoding & 0xff);
@@ -82,7 +80,7 @@ void Ws2812::show() {
     while (Index < 8)
     {
         Encoding = Encoding << 3;
-        if (colour & BIT23)
+        if (red & BIT7)
         {
             Encoding |= 0b110;
         }
@@ -90,10 +88,10 @@ void Ws2812::show() {
         {
             Encoding |= 0b100;
         }
-        colour = colour << 1;
-        Index++;
-        
+        red = red << 1;
+        Index++;        
     }    
+    
     SPI_Data[SPI_index++] = ((Encoding >> 16) & 0xff);
     SPI_Data[SPI_index++] = ((Encoding >> 8) & 0xff);
     SPI_Data[SPI_index++] = (Encoding & 0xff);
@@ -104,7 +102,7 @@ void Ws2812::show() {
     while (Index < 8)
     {
         Encoding = Encoding << 3;
-        if (colour & BIT23)
+        if (blue & BIT7)
         {
             Encoding |= 0b110;
         }
@@ -112,18 +110,18 @@ void Ws2812::show() {
         {
             Encoding |= 0b100;
         }
-        colour = colour << 1;
-        Index++;
-        
-    }    
+        blue = blue << 1;
+        Index++;        
+    } 
+       
     SPI_Data[SPI_index++] = ((Encoding >> 16) & 0xff);
     SPI_Data[SPI_index++] = ((Encoding >> 8) & 0xff);
     SPI_Data[SPI_index++] = (Encoding & 0xff);
 
 	}
-
+  
   // Now send out the 24 (x3) bits to the SPI bus
-  SPI.transfer(SPI_Data,numLEDs*9);
+  SPI.transfer(SPI_Data,(numLEDs*9));
 
 }
 
@@ -182,108 +180,6 @@ uint32_t Ws2812::Color(uint8_t r, uint8_t g, uint8_t b) {
 
 uint8_t Ws2812::numPixels(void) const {
 	return numLEDs;
-}
-
-#pragma GCC push_options
-#pragma GCC optimize ("O0")
-
-inline void Ws2812::ws2812_writebit(uint8_t bit) {
-	if(bit == 1) {
-		ws2812_writebit_high();
-	}
-	else {
-		ws2812_writebit_low();
-	}
-}
-
-inline void Ws2812::ws2812_writebit_high() {
-
-	digitalWrite(pin, HIGH);
-
-
-	//all delays found by trial-and-error, should be improved with proper delay function / timer
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-
-	digitalWrite(pin, LOW);
-
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-}
-
-inline void Ws2812::ws2812_writebit_low() {
-
-	digitalWrite(pin, HIGH);
-
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-
-	digitalWrite(pin, LOW);
-
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
-	asm("NOP");
 }
 
 // Input a value 0 to 255 to get a color value.

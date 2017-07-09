@@ -68,11 +68,6 @@ private:
 
 	uint16_t pin;
 
-	void writeSPI(unsigned long value);
-
-	inline void ws2812_writebit(uint8_t bit);
-	inline void ws2812_writebit_high(void);
-	inline void ws2812_writebit_low(void);
 };
 
 #define BIT0 (1 << 0)
