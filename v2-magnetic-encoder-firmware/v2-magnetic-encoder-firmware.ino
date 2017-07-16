@@ -81,10 +81,7 @@
 
 #include <Wire.h>
 #include "ws2812.h"
-//#include "eeprom.h"
-//#include <EEPROM.h>
 
-#define SCHEMA 5
 #define FIRMWARE_VERSION "0.0.1"
 
 #define PIXEL_PIN   PA7
@@ -140,23 +137,6 @@ int i2c_response_mode = 0;
 
 //#define SERIAL_ENABLED
 
-//EEPROM Setup
-#define EEPROM_USED_SIZE 24 //used to only clear first X bytes on initialisation. Faster than clearing whole EEPROM.
-#define EEPROM_I2C_ADDR 1
-#define EEPROM_BRT1_ADDR 2
-#define EEPROM_BRT2_ADDR 3
-#define EEPROM_MODE1_ADDR 4
-#define EEPROM_MODE2_ADDR 5
-#define EEPROM_RATE1_ADDR 6
-#define EEPROM_RATE2_ADDR 7
-#define EEPROM_SLP1_ADDR 8
-#define EEPROM_SLP2_ADDR 9
-#define EEPROM_RGB1_ADDR 10
-#define EEPROM_RGB2_ADDR 11
-#define EEPROM_RGB3_ADDR 12
-#define EEPROM_HSV1_ADDR 13
-#define EEPROM_HSV2_ADDR 14
-#define EEPROM_HSV3_ADDR 15
 
 typedef union {
     volatile long val;
@@ -306,15 +286,15 @@ void receiveEvent(int numBytes) {
       offset = encoderCount.val;
       break;
     case I2C_SET_ADDR:
-      setI2cAddress(temp[1]);
-      blinkLeds(1,WHITE);
-      restart();
+      //setI2cAddress(temp[1]);
+      //blinkLeds(1,WHITE);
+      //restart();
       break;
     case I2C_SET_REPORT_MODE:
       i2c_response_mode = temp[1];
       break; 
     case I2C_CLEAR_EEPROM:
-      eepromClear();
+      //eepromClear();
       break; 
     case I2C_ENC_LED_PAR_MODE:
       setLedMode(temp[1],temp[2]);
@@ -428,108 +408,36 @@ byte shiftIn(byte data_pin, byte clock_pin)
 }
 
 ////////////////////////////////////////////////////////////
-//---------------------- EEPROM --------------------------//
+//---------------------- CONFIG --------------------------//
 ////////////////////////////////////////////////////////////
-
-void reinitialize() {
-  #ifdef SERIAL_ENABLED
-    Serial.println("Resetting EEPROM");
-  #endif
-
-  //eepromClear();
-  setI2cAddress(I2C_UNALLOCATED_ADDRESS);
-
-  for(int i = 0; i < 2; i++) {
-    setLedBrightness(i,ledBrightness[i]);
-    setLedMode(i,ledMode[i]);
-    setLedRate(i,ledRate[i]);
-    setLedSleep(i,ledSleep[i]);
-  }
-
-  setLedRGB(ledRGB[0],ledRGB[1],ledRGB[2]);
-  setLedHSV(ledHSV[0],ledHSV[1],ledHSV[2]);
-}
-
-void eepromLoad() {
-  #ifdef SERIAL_ENABLED
-    Serial.println("Loading EEPROM");
-  #endif
-  
-//  byte tempAddress = eeprom_read_byte((uint8_t *)EEPROM_I2C_ADDR);
-
-  //check that a value has actually been set,
-  //otherwise we use the hardware setting
-//  if(tempAddress != I2C_UNALLOCATED_ADDRESS) 
-//    i2c_address = tempAddress; 
-
-//  ledMode[0] = eeprom_read_byte((uint8_t *)EEPROM_MODE1_ADDR);
-//  ledMode[1] = eeprom_read_byte((uint8_t *)EEPROM_MODE2_ADDR);
-//  ledBrightness[0] = eeprom_read_byte((uint8_t *)EEPROM_BRT1_ADDR);
-//  ledBrightness[1] = eeprom_read_byte((uint8_t *)EEPROM_BRT2_ADDR);
-//  ledRate[0] = eeprom_read_byte((uint8_t *)EEPROM_RATE1_ADDR);
-//  ledRate[1] = eeprom_read_byte((uint8_t *)EEPROM_RATE2_ADDR);
-//  ledSleep[0] = eeprom_read_byte((uint8_t *)EEPROM_SLP1_ADDR);
-//  ledSleep[1] = eeprom_read_byte((uint8_t *)EEPROM_SLP2_ADDR);
-//  ledRGB[0] = eeprom_read_byte((uint8_t *)EEPROM_RGB1_ADDR);
-//  ledRGB[1] = eeprom_read_byte((uint8_t *)EEPROM_RGB2_ADDR);
-//  ledRGB[2] = eeprom_read_byte((uint8_t *)EEPROM_RGB3_ADDR);
-//  ledHSV[0] = eeprom_read_byte((uint8_t *)EEPROM_HSV1_ADDR);
-//  ledHSV[1] = eeprom_read_byte((uint8_t *)EEPROM_HSV2_ADDR);
-//  ledHSV[2] = eeprom_read_byte((uint8_t *)EEPROM_HSV3_ADDR);
-}
-
-void setI2cAddress(byte i2cAddress) {
-//  eeprom_write_byte((uint8_t *)EEPROM_I2C_ADDR, i2cAddress);
-}
 
 void setLedBrightness(byte led, byte brightness) {
   ledBrightness[constrain(led,0,1)] = brightness;
-//  eeprom_write_byte((uint8_t *)EEPROM_BRT1_ADDR, ledBrightness[0]);
-//  eeprom_write_byte((uint8_t *)EEPROM_BRT2_ADDR, ledBrightness[1]);
 }
 
 void setLedMode(byte led, byte mode) {
   ledMode[constrain(led,0,1)] = mode;
-//  eeprom_write_byte((uint8_t *)EEPROM_MODE1_ADDR, ledMode[0]);
-//  eeprom_write_byte((uint8_t *)EEPROM_MODE2_ADDR, ledMode[1]);
 }
 
 void setLedRate(byte led, byte rate) {
   ledRate[constrain(led,0,1)] = rate;
-//  eeprom_write_byte((uint8_t *)EEPROM_RATE1_ADDR, ledRate[0]);
-//  eeprom_write_byte((uint8_t *)EEPROM_RATE2_ADDR, ledRate[1]);
 }
 
 void setLedSleep(byte led, byte sleep) {
   ledSleep[constrain(led,0,1)] = sleep;
-//  eeprom_write_byte((uint8_t *)EEPROM_SLP1_ADDR, ledSleep[0]);
-//  eeprom_write_byte((uint8_t *)EEPROM_SLP2_ADDR, ledSleep[1]);
 }
 
 void setLedRGB(byte red, byte green, byte blue) {
   ledRGB[0] = red;
   ledRGB[1] = green;
   ledRGB[2] = blue;
-//  eeprom_write_byte((uint8_t *)EEPROM_RGB1_ADDR, ledRGB[0]);
-//  eeprom_write_byte((uint8_t *)EEPROM_RGB2_ADDR, ledRGB[1]);
-//  eeprom_write_byte((uint8_t *)EEPROM_RGB3_ADDR, ledRGB[2]);
 }
 
 void setLedHSV(byte hue, byte sat, byte val) {
   ledHSV[0] = hue;
   ledHSV[1] = sat;
   ledHSV[2] = val;
-//  eeprom_write_byte((uint8_t *)EEPROM_HSV1_ADDR, ledHSV[0]);
-//  eeprom_write_byte((uint8_t *)EEPROM_HSV2_ADDR, ledHSV[1]);
-//  eeprom_write_byte((uint8_t *)EEPROM_HSV3_ADDR, ledHSV[2]);
 }
-
-void eepromClear() {
-  for (byte i = 0; i < EEPROM_USED_SIZE; i++) {
-//    eeprom_write_byte((uint8_t *)i,0);
-  }
-}
-
 
 ////////////////////////////////////////////////////////////
 //------------------------ LEDS --------------------------//
@@ -642,7 +550,7 @@ void watchResetPin() {
       //blink LEDs, if still shorted after this reset
       blinkLeds(5,WHITE);
       if(digitalRead(DISABLE_PIN) == LOW) {
-        reinitialize();
+        //reinitialize();
         blinkLeds(1,GREEN);
         restart();
       }
