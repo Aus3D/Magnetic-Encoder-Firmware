@@ -17,6 +17,10 @@ Ws2812::Ws2812(uint8_t num, uint16_t outputPin) {
 	numLEDs = numBytes = 0;
 	}
 
+ if((brightness = (uint8_t *)malloc(numLEDs))) {
+    memset(brightness, 255, numLEDs);
+ }
+
 }
 
 void Ws2812::begin(void) {
@@ -38,7 +42,7 @@ void Ws2812::show() {
   uint32_t Encoding=0;
   uint8_t SPI_Data[numLEDs*9];
   uint32_t SPI_index = 0;
-  uint8_t *p;
+  uint8_t *p, *b;
   uint8_t green;
   uint8_t red;
   uint8_t blue;
@@ -46,73 +50,30 @@ void Ws2812::show() {
   
 	for(int i = 0; i < numLEDs; i++) {
 
-    p = &pixels[i * 3];
+    b = &brightness[i];
+    float scale = (float)b[0] / 255;
 
-    green = p[0];
-    red   = p[1];
-    blue  = p[2];
+    p = &pixels[i * 3];
+    green = p[0] * scale;
+    red   = p[1] * scale;
+    blue  = p[2] * scale;
     
     // Process the GREEN byte
-    Index = 0;
-    Encoding = 0;
-    while (Index < 8)
-    {
-        Encoding = Encoding << 3;
-        if (green & BIT7)
-        {
-            Encoding |= 0b110;
-        }
-        else
-        {
-            Encoding |= 0b100;
-        }
-        green = green << 1;
-        Index++;        
-    }   
+    Encoding = SPIEncodedValue(green);
      
     SPI_Data[SPI_index++] = ((Encoding >> 16) & 0xff);
     SPI_Data[SPI_index++] = ((Encoding >> 8) & 0xff);
     SPI_Data[SPI_index++] = (Encoding & 0xff);
     
     // Process the RED byte
-    Index=0;
-    Encoding=0;
-    while (Index < 8)
-    {
-        Encoding = Encoding << 3;
-        if (red & BIT7)
-        {
-            Encoding |= 0b110;
-        }
-        else
-        {
-            Encoding |= 0b100;
-        }
-        red = red << 1;
-        Index++;        
-    }    
+    Encoding = SPIEncodedValue(red);
     
     SPI_Data[SPI_index++] = ((Encoding >> 16) & 0xff);
     SPI_Data[SPI_index++] = ((Encoding >> 8) & 0xff);
     SPI_Data[SPI_index++] = (Encoding & 0xff);
     
     // Process the BLUE byte
-    Index=0;
-    Encoding=0;
-    while (Index < 8)
-    {
-        Encoding = Encoding << 3;
-        if (blue & BIT7)
-        {
-            Encoding |= 0b110;
-        }
-        else
-        {
-            Encoding |= 0b100;
-        }
-        blue = blue << 1;
-        Index++;        
-    } 
+    Encoding = SPIEncodedValue(blue);
        
     SPI_Data[SPI_index++] = ((Encoding >> 16) & 0xff);
     SPI_Data[SPI_index++] = ((Encoding >> 8) & 0xff);
@@ -123,6 +84,28 @@ void Ws2812::show() {
   // Now send out the 24 (x3) bits to the SPI bus
   SPI.transfer(SPI_Data,(numLEDs*9));
 
+}
+
+uint32_t Ws2812::SPIEncodedValue(uint8_t color) {
+    int index = 0;
+    uint32_t encoding = 0;
+    
+    while (index < 8)
+    {
+        encoding = encoding << 3;
+        if (color & BIT7)
+        {
+            encoding |= 0b110;
+        }
+        else
+        {
+            encoding |= 0b100;
+        }
+        color = color << 1;
+        index++;        
+    } 
+
+    return encoding;
 }
 
 void Ws2812::setPixelColor(uint8_t pixel, uint8_t red, uint8_t green, uint8_t blue) {
@@ -154,6 +137,17 @@ void Ws2812::setPixelColor(uint8_t pixel, uint32_t color) {
 		p[2] = b;
 
 	}
+}
+
+void Ws2812::setPixelBrightness(uint8_t pixel, uint8_t bright) {
+  if(pixel < numLEDs) {
+
+    uint8_t *b;
+
+    b = &brightness[pixel];
+
+    b[0] = bright;
+  }
 }
 
 void Ws2812::setAllColor(uint8_t red, uint8_t green, uint8_t blue) {
