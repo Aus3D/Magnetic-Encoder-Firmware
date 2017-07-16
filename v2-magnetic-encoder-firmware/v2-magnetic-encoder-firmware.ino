@@ -1,32 +1,585 @@
+/*
+/---------------------------------------------------------------/
+ * Code for the Aus3D Magnetic Encoder I2C Module
+ * Chris Barr, 2016
+ * 
+ * This module is designed to connect to a host device via I2C,
+ * and report the current position as observed by the magnetic encoder.
+ * 
+ * This code is compatible with both AMS AS5311 and NSE-5310 magnetic encoder ICs. The relevant IC must be defined below.
+ * 
+ * The following I2C commands are implemented:
+ *    
+ * 1: Resets travelled distance to zero
+ * 
+ * 2: Sets this modules I2C address to the next byte received, 
+ *    saves in EEPROM
+ *    Module resets and rejoins bus with new address
+ *    
+ * 3: Set the information that will be sent on the next I2C request.
+ *      0: Default, responds with encoder count
+ *      1: Responds with magnetic signal strength
+ *            0: Signal good, in range.
+ *            1: Signal weak, edge of range (but probably usable)
+ *            2: Signal weak / lost, edge / outside of range (probably not usable)
+ *      2: Responds with firmware version + compile date / time
+ *      3: Responds with raw encoder reading
+ *
+ * 4: Clear the settings saved in EEPROM, restoring all defaults
+ *      Handy to return to hardware I2C address if required
+ *      A power cycle will be required for settings to reset
+ *
+ * 10: Sets the mode of the LEDs based on the next two bytes received, 
+ *     byte1 = led (0 or 1), byte 2 = mode (see below)
+ *     saves in EEPROM
+ *
+ * 11: Sets the brightness of the LEDs based on the next two bytes received,
+ *    byte1 = led (0 or 1), byte 2 = brightness (0-255)
+ *    saves in EEPROM
+ *
+ * 12: Sets the RGB value for the LEDs to the next three bytes received,
+ *     LEDs must still be set to RGB mode to display the sent value.
+ *
+ * 13: Sets the HSV value for the LEDs to the next three bytes received,
+ *     LEDs must still be set to HSV mode to display the sent value.
+ *
+ * 14: Set the rate variable of the LEDs based on the next two bytes received,
+ *      Rate is used in some of the different LED modes
+ * 
+ * I2C address can either be set over I2C (as shown above), or configured by cutting jumper traces on PCB.
+ * If the address has been set by I2C, it can only be overridden by setting a new address over I2C, or by
+ * sending the I2C command to reset the EEPROM.
+ * 
+ * 0 = default
+ * 1 = trace cut
+ * 
+ * ADR1 ADR2 |  Mode
+ *  0    0   |   X      //Default
+ *  0    1   |   Y
+ *  1    0   |   Z
+ *  1    1   |   E
+ *  
+ *  LED Modes:
+ *  
+ *  0     Status indication of magnetic field
+ *  1     Solid White
+ *  2     Solid Red
+ *  3     Solid Green
+ *  4     Solid Blue
+ *  5     RGB Value
+ *  6     HSV Value
+ *  7     Party Mode 1
+ *  8     Party Mode 2
+ *              
+ *              
+ *  Requires Arduino on Breadboard hardware core from this page:
+ *  https://www.arduino.cc/en/Tutorial/ArduinoToBreadboard
+ *  
+ *  For the ATmega328P with internal 8MHz clock
+ /---------------------------------------------------------------/
+ */
+
+#include <Wire.h>
 #include "ws2812.h"
+//#include "eeprom.h"
+//#include <EEPROM.h>
 
-#define WS2812_PIN PA7
-#define WS2812_NUM 2
+#define SCHEMA 5
+#define FIRMWARE_VERSION "0.0.1"
 
-Ws2812 pixels = Ws2812(WS2812_NUM,WS2812_PIN);
+#define PIXEL_PIN   PA7
+#define PIXEL_NUM   2
 
+#define DISABLE_PIN PA5
+
+//Encoder Setup
+#define ENC_SELECT_PIN  PA0
+#define ENC_CLOCK_PIN   PF1
+#define ENC_DATA_PIN    PF0
+
+//I2C Slave Setup
+#define ADDR1_PIN   PA1
+#define ADDR2_PIN   PA2
+#define ADDR3_PIN   PA3
+
+//I2C Defines
+#define I2C_MAG_SIG_GOOD  0
+#define I2C_MAG_SIG_MID   1
+#define I2C_MAG_SIG_BAD   2
+
+#define I2C_REPORT_POSITION   0
+#define I2C_REPORT_STATUS     1
+#define I2C_REPORT_VERSION    2
+#define I2C_REPORT_RAW        3
+
+#define I2C_REQ_REPORT        0
+#define I2C_RESET_COUNT       1
+#define I2C_SET_ADDR          2
+#define I2C_SET_REPORT_MODE   3
+#define I2C_CLEAR_EEPROM      4
+
+#define I2C_ENC_LED_PAR_MODE  10
+#define I2C_ENC_LED_PAR_BRT   11
+#define I2C_ENC_LED_PAR_RATE  12
+#define I2C_ENC_LED_PAR_RGB   13
+#define I2C_ENC_LED_PAR_HSV   14
+
+//default I2C addresses
+#define I2C_ENCODER_PRESET_ADDR_X 30
+#define I2C_ENCODER_PRESET_ADDR_Y 31
+#define I2C_ENCODER_PRESET_ADDR_Z 32
+#define I2C_ENCODER_PRESET_ADDR_E 33
+#define I2C_UNALLOCATED_ADDRESS   0
+
+#define MAG_GOOD_RANGE 4
+#define I2C_READ_BYTES 4
+
+const byte i2c_base_address = I2C_ENCODER_PRESET_ADDR_X;
+byte i2c_address;
+int i2c_response_mode = 0;
+
+//#define SERIAL_ENABLED
+
+//EEPROM Setup
+#define EEPROM_USED_SIZE 24 //used to only clear first X bytes on initialisation. Faster than clearing whole EEPROM.
+#define EEPROM_I2C_ADDR 1
+#define EEPROM_BRT1_ADDR 2
+#define EEPROM_BRT2_ADDR 3
+#define EEPROM_MODE1_ADDR 4
+#define EEPROM_MODE2_ADDR 5
+#define EEPROM_RATE1_ADDR 6
+#define EEPROM_RATE2_ADDR 7
+#define EEPROM_SLP1_ADDR 8
+#define EEPROM_SLP2_ADDR 9
+#define EEPROM_RGB1_ADDR 10
+#define EEPROM_RGB2_ADDR 11
+#define EEPROM_RGB3_ADDR 12
+#define EEPROM_HSV1_ADDR 13
+#define EEPROM_HSV2_ADDR 14
+#define EEPROM_HSV3_ADDR 15
+
+typedef union {
+    volatile long val;
+    byte bval[4];
+}i2cLong;
+
+i2cLong encoderCount;
+i2cLong rawCount;
+
+long count = 0;
+long oldCount = 0;
+long revolutions = 0;
+long offset = 0;
+bool offsetInitialised = false;
+long avgSpeed = 0;
+
+float mm = 0;
+float oldMm = -999;
+float prevMm = 0;
+
+bool OCF = false;
+bool COF = false;
+bool LIN = false;
+bool mINC = false;
+bool mDEC = false;
+
+byte magStrength = I2C_MAG_SIG_BAD;
+
+unsigned long lastLoopTime = 0;
+
+byte addressOffset;
+
+byte ledBrightness[] = {20,20};
+byte ledMode[]       = {0,0};
+byte ledRate[]       = {0,0};
+byte ledSleep[]      = {0,0};
+
+byte ledRGB[] = {255,0,0};
+byte ledHSV[] = {255,255,255};
+
+Ws2812 pixels = Ws2812(PIXEL_NUM,PIXEL_PIN);
 
 // the setup function runs once when you press reset or power the board
 void setup() {
-  // initialize digital pin LED_BUILTIN as an output.
-  pinMode(LED_BUILTIN, OUTPUT);
 
-  pixels.begin();
-  pixels.setPixelColor(0,0,255,0);
-  pixels.setPixelColor(1,0,255,0);
-  pixels.show();
+  //Configure pins
+  pinMode(ENC_SELECT_PIN, OUTPUT);
+  pinMode(ADDR1_PIN,INPUT_PULLUP);
+  pinMode(ADDR2_PIN,INPUT_PULLUP);
+  pinMode(ADDR3_PIN,INPUT_PULLUP);
+  pinMode(DISABLE_PIN,INPUT_PULLUP);
+  pinMode(ENC_DATA_PIN, INPUT);
+  pinMode(ENC_CLOCK_PIN, OUTPUT);
   
+  digitalWrite(ENC_CLOCK_PIN, HIGH);
+  digitalWrite(ENC_SELECT_PIN, HIGH);
+
+  //Configure LEDs
+  pixels.begin();
+
+  //Check reset pin for permanent disable
+  if(digitalRead(DISABLE_PIN) == LOW) {
+    //crude debounce
+    delay(100);
+    if(digitalRead(DISABLE_PIN) == LOW) {
+      //Set enc_select low to enable encoder I2C with external controller
+      digitalWrite(ENC_SELECT_PIN, LOW);
+      blinkLeds(1,WHITE);
+      //Halt startup and never proceed
+      while(true);
+    }
+  }
+
+  //Initialise communication with encoder IC
+  if(initEncoder() == false) {
+
+    while(initEncoder() == false) {
+     blinkLeds(1,RED); 
+    }
+  } else {
+    blinkLeds(1,GREEN);
+  }
+
+  //Read address pins as 3-bit number
+  addressOffset = !digitalRead(ADDR3_PIN) + 2*(!digitalRead(ADDR2_PIN)) + 4*(!digitalRead(ADDR1_PIN));
+
+  //Set I2C address from value
+  i2c_address = i2c_base_address + addressOffset;
+
+  //Signal I2C address
+  for(int i = 0; i < (addressOffset+1); i++) {
+    blinkLeds(1,(2000 / (addressOffset+1)),WHITE);
+  }
+  
+  delay(50);
+
+  //Join I2C bus as slave
+  Wire.begin(i2c_address);
+  Wire.onRequest(requestEvent);
+  Wire.onReceive(receiveEvent);
+    
 }
 
 // the loop function runs over and over again forever
 void loop() {
-  ledTest(0);
-  ledTest(1);
+  updateEncoder();
+  updateLeds();
+  watchResetPin();
+}
+
+
+
+////////////////////////////////////////////////////////////
+//----------------------- I2C ----------------------------//
+////////////////////////////////////////////////////////////
+
+void requestEvent() {
+  switch (i2c_response_mode) {
+    case I2C_REPORT_POSITION:
+      Wire.write(encoderCount.bval,3);
+      break;
+    case I2C_REPORT_STATUS:
+      Wire.write(magStrength);
+      break;
+    case I2C_REPORT_VERSION:
+      reportVersion();
+      break;
+    case I2C_REPORT_RAW:
+      rawCount.val = count;
+      Wire.write(rawCount.bval,4);
+      break;
+  }
+}
+
+void receiveEvent(int numBytes) {
+
+  byte temp[5] = {0};
+  int tempIndex = 0;
+
+  while(Wire.available() > 0) {
+    temp[tempIndex] = Wire.read();
+    tempIndex++;
+  }
+
+  switch(temp[0]) {
+    case I2C_RESET_COUNT:
+      offset = encoderCount.val;
+      break;
+    case I2C_SET_ADDR:
+      setI2cAddress(temp[1]);
+      blinkLeds(1,WHITE);
+      restart();
+      break;
+    case I2C_SET_REPORT_MODE:
+      i2c_response_mode = temp[1];
+      break; 
+    case I2C_CLEAR_EEPROM:
+      eepromClear();
+      break; 
+    case I2C_ENC_LED_PAR_MODE:
+      setLedMode(temp[1],temp[2]);
+      break;
+    case I2C_ENC_LED_PAR_BRT:
+      setLedBrightness(temp[1],temp[2]);
+      break;  
+    case I2C_ENC_LED_PAR_RGB:
+      setLedRGB(temp[1],temp[2],temp[3]);
+      break;   
+    case I2C_ENC_LED_PAR_HSV:
+      setLedHSV(temp[1],temp[2],temp[3]);
+      break;   
+    case I2C_ENC_LED_PAR_RATE:
+      setLedRate(temp[1],temp[2]);
+      break;    
+  }  
+}
+
+void reportVersion() {
+  // example: 1.0.0, Jul 15 2016, 21:07:40
+  String versionString = FIRMWARE_VERSION ", " __DATE__ ", " __TIME__ ".";
+  Wire.write(versionString.c_str());
+}
+
+////////////////////////////////////////////////////////////
+//--------------------- ENCODER --------------------------//
+////////////////////////////////////////////////////////////
+bool initEncoder() {
+  
+    return true;
 
 }
 
-void ledTest(int pixel) {
+void updateEncoder() {
+  count = readPosition();
+
+  //check if we've moved from one pole-pair to the next
+  if((count-oldCount) > 2048) {
+    revolutions -= 1;
+  } else if((oldCount - count) > 2048) {
+    revolutions += 1;
+  }
+
+  oldCount = count;
+
+  //make the starting position 'zero'
+  if(offsetInitialised == false) {
+    offset = -count;
+    offsetInitialised = true;
+  }
+  encoderCount.val = (revolutions * 4092) + (count + offset);
+  encoderCount.val = ((encoderCount.val &~((long)3 << 22)) | ((long)magStrength << 22)); //clear the upper two bits of the third byte, insert the two-bit magStrength value
+}
+
+int readPosition() {
+  unsigned int position = 0;
+
+  //shift in our data  
+  digitalWrite(ENC_SELECT_PIN, LOW);
+  delayMicroseconds(1);
+  byte d1 = shiftIn(ENC_DATA_PIN, ENC_CLOCK_PIN);
+  byte d2 = shiftIn(ENC_DATA_PIN, ENC_CLOCK_PIN);
+  byte d3 = shiftIn(ENC_DATA_PIN, ENC_CLOCK_PIN);
+  digitalWrite(ENC_SELECT_PIN, HIGH);
   
+  //get our position variable
+  position = d1;
+  position = position << 8;
+  
+  position |= d2;
+  position = position >> 4;
+  
+  if (!(d2 & B00001000)) {
+    OCF = true;
+  }
+  
+  if (!(d2 & B00000100)) {
+    COF = true;
+  }
+  
+  LIN = bitRead(d2,1);
+  mINC = bitRead(d2,0);
+  mDEC = bitRead(d3,7);
+  
+  //determine magnetic signal strength
+  if(mINC == false && mDEC == false) { magStrength = I2C_MAG_SIG_GOOD;  }
+  if(mINC == true && mDEC == true && LIN == false) { magStrength = I2C_MAG_SIG_MID;  }
+  if(mINC == true && mDEC == true && LIN == true) { magStrength = I2C_MAG_SIG_BAD;  }
+
+  return position;
+}
+
+//read in a byte of data from the digital input of the board.
+byte shiftIn(byte data_pin, byte clock_pin)
+{
+  byte data = 0;
+
+  for (int i=7; i>=0; i--)
+  {
+    digitalWrite(clock_pin, LOW);
+    delayMicroseconds(1);
+    digitalWrite(clock_pin, HIGH);
+    delayMicroseconds(1);
+
+    byte bit = digitalRead(data_pin);
+    data |= (bit << i);
+  }
+
+  return data;
+}
+
+////////////////////////////////////////////////////////////
+//---------------------- EEPROM --------------------------//
+////////////////////////////////////////////////////////////
+
+void reinitialize() {
+  #ifdef SERIAL_ENABLED
+    Serial.println("Resetting EEPROM");
+  #endif
+
+  //eepromClear();
+  setI2cAddress(I2C_UNALLOCATED_ADDRESS);
+
+  for(int i = 0; i < 2; i++) {
+    setLedBrightness(i,ledBrightness[i]);
+    setLedMode(i,ledMode[i]);
+    setLedRate(i,ledRate[i]);
+    setLedSleep(i,ledSleep[i]);
+  }
+
+  setLedRGB(ledRGB[0],ledRGB[1],ledRGB[2]);
+  setLedHSV(ledHSV[0],ledHSV[1],ledHSV[2]);
+}
+
+void eepromLoad() {
+  #ifdef SERIAL_ENABLED
+    Serial.println("Loading EEPROM");
+  #endif
+  
+//  byte tempAddress = eeprom_read_byte((uint8_t *)EEPROM_I2C_ADDR);
+
+  //check that a value has actually been set,
+  //otherwise we use the hardware setting
+//  if(tempAddress != I2C_UNALLOCATED_ADDRESS) 
+//    i2c_address = tempAddress; 
+
+//  ledMode[0] = eeprom_read_byte((uint8_t *)EEPROM_MODE1_ADDR);
+//  ledMode[1] = eeprom_read_byte((uint8_t *)EEPROM_MODE2_ADDR);
+//  ledBrightness[0] = eeprom_read_byte((uint8_t *)EEPROM_BRT1_ADDR);
+//  ledBrightness[1] = eeprom_read_byte((uint8_t *)EEPROM_BRT2_ADDR);
+//  ledRate[0] = eeprom_read_byte((uint8_t *)EEPROM_RATE1_ADDR);
+//  ledRate[1] = eeprom_read_byte((uint8_t *)EEPROM_RATE2_ADDR);
+//  ledSleep[0] = eeprom_read_byte((uint8_t *)EEPROM_SLP1_ADDR);
+//  ledSleep[1] = eeprom_read_byte((uint8_t *)EEPROM_SLP2_ADDR);
+//  ledRGB[0] = eeprom_read_byte((uint8_t *)EEPROM_RGB1_ADDR);
+//  ledRGB[1] = eeprom_read_byte((uint8_t *)EEPROM_RGB2_ADDR);
+//  ledRGB[2] = eeprom_read_byte((uint8_t *)EEPROM_RGB3_ADDR);
+//  ledHSV[0] = eeprom_read_byte((uint8_t *)EEPROM_HSV1_ADDR);
+//  ledHSV[1] = eeprom_read_byte((uint8_t *)EEPROM_HSV2_ADDR);
+//  ledHSV[2] = eeprom_read_byte((uint8_t *)EEPROM_HSV3_ADDR);
+}
+
+void setI2cAddress(byte i2cAddress) {
+//  eeprom_write_byte((uint8_t *)EEPROM_I2C_ADDR, i2cAddress);
+}
+
+void setLedBrightness(byte led, byte brightness) {
+  ledBrightness[constrain(led,0,1)] = brightness;
+//  eeprom_write_byte((uint8_t *)EEPROM_BRT1_ADDR, ledBrightness[0]);
+//  eeprom_write_byte((uint8_t *)EEPROM_BRT2_ADDR, ledBrightness[1]);
+}
+
+void setLedMode(byte led, byte mode) {
+  ledMode[constrain(led,0,1)] = mode;
+//  eeprom_write_byte((uint8_t *)EEPROM_MODE1_ADDR, ledMode[0]);
+//  eeprom_write_byte((uint8_t *)EEPROM_MODE2_ADDR, ledMode[1]);
+}
+
+void setLedRate(byte led, byte rate) {
+  ledRate[constrain(led,0,1)] = rate;
+//  eeprom_write_byte((uint8_t *)EEPROM_RATE1_ADDR, ledRate[0]);
+//  eeprom_write_byte((uint8_t *)EEPROM_RATE2_ADDR, ledRate[1]);
+}
+
+void setLedSleep(byte led, byte sleep) {
+  ledSleep[constrain(led,0,1)] = sleep;
+//  eeprom_write_byte((uint8_t *)EEPROM_SLP1_ADDR, ledSleep[0]);
+//  eeprom_write_byte((uint8_t *)EEPROM_SLP2_ADDR, ledSleep[1]);
+}
+
+void setLedRGB(byte red, byte green, byte blue) {
+  ledRGB[0] = red;
+  ledRGB[1] = green;
+  ledRGB[2] = blue;
+//  eeprom_write_byte((uint8_t *)EEPROM_RGB1_ADDR, ledRGB[0]);
+//  eeprom_write_byte((uint8_t *)EEPROM_RGB2_ADDR, ledRGB[1]);
+//  eeprom_write_byte((uint8_t *)EEPROM_RGB3_ADDR, ledRGB[2]);
+}
+
+void setLedHSV(byte hue, byte sat, byte val) {
+  ledHSV[0] = hue;
+  ledHSV[1] = sat;
+  ledHSV[2] = val;
+//  eeprom_write_byte((uint8_t *)EEPROM_HSV1_ADDR, ledHSV[0]);
+//  eeprom_write_byte((uint8_t *)EEPROM_HSV2_ADDR, ledHSV[1]);
+//  eeprom_write_byte((uint8_t *)EEPROM_HSV3_ADDR, ledHSV[2]);
+}
+
+void eepromClear() {
+  for (byte i = 0; i < EEPROM_USED_SIZE; i++) {
+//    eeprom_write_byte((uint8_t *)i,0);
+  }
+}
+
+
+////////////////////////////////////////////////////////////
+//------------------------ LEDS --------------------------//
+////////////////////////////////////////////////////////////
+
+void updateLeds() {
+  for(int i = 0; i < PIXEL_NUM; i++) {
+    switch (ledMode[i]) {
+      case 0:
+        if(magStrength == I2C_MAG_SIG_GOOD) { 
+          pixels.setPixelColor(i, GREEN);
+          //leds[i] = CRGB::Green; 
+        } else if(magStrength == I2C_MAG_SIG_MID) { 
+          pixels.setPixelColor(i, YELLOW);
+        } else if(magStrength == I2C_MAG_SIG_BAD) {
+          pixels.setPixelColor(i, RED); 
+        }
+        break;
+      case 1:
+        //leds[i] = CRGB::White;
+        break;
+      case 2:
+        //leds[i] = CRGB::Red;
+        break;
+      case 3:
+        //leds[i] = CRGB::Green;
+        break;
+      case 4:
+        //leds[i] = CRGB::Blue;
+        break;
+      case 5:
+        //leds[i].setRGB(ledRGB[0],ledRGB[1],ledRGB[2]);
+        break;
+      case 6:
+        //leds[i].setHSV(ledHSV[0],ledHSV[1],ledHSV[2]);
+        break;
+      case 7:
+        //leds[i].setHSV(encoderCount.val/10*ledRate[i],255,255);
+        break;
+      case 8:
+        //leds[i].setHSV(millis()/1000*ledRate[i],255,255);
+        break;
+    }
+    pixels.setPixelBrightness(i,ledBrightness[i]);
+  }
+  pixels.show();
+}
+
+void ledTest(int pixel) {
+  /*
   pixels.setPixelColor(pixel,255,0,0);
   pixels.show();
   delay(500);
@@ -52,5 +605,55 @@ void ledTest(int pixel) {
     pixels.show();
     delay(10);
   }
+  */
+}
+
+void blinkLeds(int times, const uint32_t rgb) {
+  blinkLeds(times, 1000, rgb);
+}
+
+void blinkLeds(int times, int duration, const uint32_t rgb) {
+  for(int i = 0; i < times; i++) {  
+    for(int j = 0; j < PIXEL_NUM; j++) {
+      pixels.setPixelColor(j,rgb);
+      pixels.setPixelBrightness(j,20);//leds[j].nscale8(20);
+    }
+    pixels.show();
+    delay(duration/2);
+    for(int j = 0; j < PIXEL_NUM; j++) {
+      pixels.setPixelColor(j,BLACK);
+      //leds[j].nscale8(ledBrightness[j]);
+    }
+    pixels.show();
+    delay(duration/2);
+  }  
+}
+
+////////////////////////////////////////////////////////////
+//------------------------ MISC --------------------------//
+////////////////////////////////////////////////////////////
+
+void watchResetPin() {
+  //check reset pin
+  if(digitalRead(DISABLE_PIN) == LOW) {
+    //crude debounce
+    delay(100);
+    if(digitalRead(DISABLE_PIN) == LOW) {
+      //blink LEDs, if still shorted after this reset
+      blinkLeds(5,WHITE);
+      if(digitalRead(DISABLE_PIN) == LOW) {
+        reinitialize();
+        blinkLeds(1,GREEN);
+        restart();
+      }
+    }
+  }
+}
+
+//enable the watchdog timer and loop infinitely to trigger a reset
+void restart() {
+  delay(10);
+  //wdt_enable(WDTO_250MS);
+  for(;;);
 }
 
