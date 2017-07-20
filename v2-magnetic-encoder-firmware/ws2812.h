@@ -35,10 +35,12 @@
 #define __ws2812
 
 #include <Arduino.h>
-#include <stdint.h> 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
+//#include <stdint.h> 
+//#include <stdlib.h>
+//#include <stdio.h>
+//#include <string.h>
+
+#define MAX_PIXELS 2
 
 uint32_t Wheel(uint8_t WheelPos);
 
@@ -64,9 +66,9 @@ public:
 private:
 
 	bool begun;
-	uint8_t *pixels;
-  uint8_t *brightness;
-	uint8_t numLEDs;
+	uint32_t  pixels[MAX_PIXELS];
+  uint8_t   brightness[MAX_PIXELS];
+	uint8_t   numLEDs;
 
 	uint16_t pin;
 

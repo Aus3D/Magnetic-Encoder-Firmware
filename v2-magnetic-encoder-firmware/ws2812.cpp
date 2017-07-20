@@ -6,20 +6,16 @@ Ws2812::Ws2812(uint8_t num, uint16_t outputPin) {
 	pin = outputPin;
 	begun = false;
 
-	if(pixels) free(pixels);
-
-	int numBytes = numLEDs * 3;
-
-	if((pixels = (uint8_t *)malloc(numBytes))) {
-	    memset(pixels, 0, numBytes);
-		numLEDs = num;
+	if(num > MAX_PIXELS) {
+    numLEDs = MAX_PIXELS;
 	} else {
-	numLEDs = numBytes = 0;
+    numLEDs = num;
 	}
 
- if((brightness = (uint8_t *)malloc(numLEDs))) {
-    memset(brightness, 255, numLEDs);
- }
+  for(int i = 0; i < numLEDs; i++) {
+    pixels[i] = 0;
+    brightness[i] = 0;
+  }
 
 }
 
@@ -50,13 +46,13 @@ void Ws2812::show() {
   
 	for(int i = 0; i < numLEDs; i++) {
 
-    b = &brightness[i];
-    float scale = (float)b[0] / 255;
+    //b = &brightness[i];
+    float scale = (float)brightness[i] / 255;
 
-    p = &pixels[i * 3];
-    green = p[0] * scale;
-    red   = p[1] * scale;
-    blue  = p[2] * scale;
+    //p = &pixels[i * 3];
+    green = (uint8_t)(pixels[i] >> 8) * scale;
+    red   = (uint8_t)(pixels[i] >> 16) * scale;
+    blue  = (uint8_t)(pixels[i] >> 0) * scale;
     
     // Process the GREEN byte
     Encoding = SPIEncodedValue(green);
@@ -109,44 +105,18 @@ uint32_t Ws2812::SPIEncodedValue(uint8_t color) {
 }
 
 void Ws2812::setPixelColor(uint8_t pixel, uint8_t red, uint8_t green, uint8_t blue) {
-	if(pixel < numLEDs) {
-
-		uint8_t *p;
-
-		p = &pixels[pixel * 3];
-
-		p[0] = green;
-		p[1] = red;
-		p[2] = blue;
-
-	}
+	setPixelColor(pixel,Color(red, green, blue));
 }
 
 void Ws2812::setPixelColor(uint8_t pixel, uint32_t color) {
 	if(pixel < numLEDs) {
-
-		uint8_t *p,
-		  r = (uint8_t)(color >> 16),
-		  g = (uint8_t)(color >>  8),
-		  b = (uint8_t)color;
-
-		p = &pixels[pixel * 3];
-
-		p[0] = g;
-		p[1] = r;
-		p[2] = b;
-
+    pixels[pixel] = color;
 	}
 }
 
 void Ws2812::setPixelBrightness(uint8_t pixel, uint8_t bright) {
   if(pixel < numLEDs) {
-
-    uint8_t *b;
-
-    b = &brightness[pixel];
-
-    b[0] = bright;
+    brightness[pixel] = bright;
   }
 }
 
