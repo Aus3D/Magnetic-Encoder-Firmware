@@ -121,22 +121,17 @@
 #define I2C_ENC_LED_PAR_RGB   13
 #define I2C_ENC_LED_PAR_HSV   14
 
-//default I2C addresses
-#define I2C_ENCODER_PRESET_ADDR_X 30
-#define I2C_ENCODER_PRESET_ADDR_Y 31
-#define I2C_ENCODER_PRESET_ADDR_Z 32
-#define I2C_ENCODER_PRESET_ADDR_E 33
-#define I2C_UNALLOCATED_ADDRESS   0
+//default I2C address
+#define I2C_ENCODER_BASE_ADDR  30
 
 #define MAG_GOOD_RANGE 4
 #define I2C_READ_BYTES 4
 
-const byte i2c_base_address = I2C_ENCODER_PRESET_ADDR_X;
+#define LOOP_TIME_MICROS 1000
+
+const byte i2c_base_address = I2C_ENCODER_BASE_ADDR;
 byte i2c_address;
 int i2c_response_mode = 0;
-
-//#define SERIAL_ENABLED
-
 
 typedef union {
     volatile long val;
@@ -153,15 +148,16 @@ long offset = 0;
 bool offsetInitialised = false;
 long avgSpeed = 0;
 
-float mm = 0;
-float oldMm = -999;
-float prevMm = 0;
+#define MAX_POSITION_SAMPLES 16
+long positionHistory[MAX_POSITION_SAMPLES];
 
 bool OCF = false;
 bool COF = false;
 bool LIN = false;
 bool mINC = false;
 bool mDEC = false;
+
+int parityErrorCount = 0;
 
 byte magStrength = I2C_MAG_SIG_BAD;
 
@@ -197,19 +193,6 @@ void setup() {
   //Configure LEDs
   pixels.begin();
 
-  //Check reset pin for permanent disable
-  if(digitalRead(DISABLE_PIN) == LOW) {
-    //crude debounce
-    delay(100);
-    if(digitalRead(DISABLE_PIN) == LOW) {
-      //Set enc_select low to enable encoder I2C with external controller
-      digitalWrite(ENC_SELECT_PIN, LOW);
-      blinkLeds(1,WHITE);
-      //Halt startup and never proceed
-      while(true);
-    }
-  }
-
   //Initialise communication with encoder IC
   if(initEncoder() == false) {
 
@@ -221,7 +204,7 @@ void setup() {
   }
 
   //Read address pins as 3-bit number
-  addressOffset = !digitalRead(ADDR3_PIN) + 2*(!digitalRead(ADDR2_PIN)) + 4*(!digitalRead(ADDR1_PIN));
+  addressOffset = !((digitalRead(ADDR3_PIN)) | (digitalRead(ADDR2_PIN) << 1) | (digitalRead(ADDR1_PIN) << 2));//0;//!digitalRead(ADDR3_PIN) + 2*(!digitalRead(ADDR2_PIN)) + 4*(!digitalRead(ADDR1_PIN));
 
   //Set I2C address from value
   i2c_address = i2c_base_address + addressOffset;
@@ -237,16 +220,21 @@ void setup() {
   Wire.begin(i2c_address);
   Wire.onRequest(requestEvent);
   Wire.onReceive(receiveEvent);
-    
+  
 }
 
-// the loop function runs over and over again forever
+// main program loop
 void loop() {
+  
+  while(micros() - lastLoopTime < LOOP_TIME_MICROS) {
+    delayMicroseconds(1); 
+  }
+
+  lastLoopTime = micros();
+  
   updateEncoder();
   updateLeds();
-  watchResetPin();
 }
-
 
 
 ////////////////////////////////////////////////////////////
@@ -324,9 +312,12 @@ void reportVersion() {
 //--------------------- ENCODER --------------------------//
 ////////////////////////////////////////////////////////////
 bool initEncoder() {
-  
-    return true;
 
+  for(int i = 0; i < MAX_POSITION_SAMPLES; i++) {
+    positionHistory[i] = 0;
+  }
+  
+  return true;
 }
 
 void updateEncoder() {
@@ -346,12 +337,19 @@ void updateEncoder() {
     offset = -count;
     offsetInitialised = true;
   }
-  encoderCount.val = (revolutions * 4092) + (count + offset);
+
+  for(int i = MAX_POSITION_SAMPLES; i > 0; i--) {
+    positionHistory[i] = positionHistory[i-1];
+  }
+
+  positionHistory[0] = (revolutions * 4092) + (count + offset);
+  
+  encoderCount.val = positionHistory[0];
   encoderCount.val = ((encoderCount.val &~((long)3 << 22)) | ((long)magStrength << 22)); //clear the upper two bits of the third byte, insert the two-bit magStrength value
 }
 
 int readPosition() {
-  unsigned int position = 0;
+  static uint16_t position = 0;
 
   //shift in our data  
   digitalWrite(ENC_SELECT_PIN, LOW);
@@ -360,30 +358,46 @@ int readPosition() {
   byte d2 = shiftIn(ENC_DATA_PIN, ENC_CLOCK_PIN);
   byte d3 = shiftIn(ENC_DATA_PIN, ENC_CLOCK_PIN);
   digitalWrite(ENC_SELECT_PIN, HIGH);
+
+  //check parity
+  int parityCount = 0;
   
-  //get our position variable
-  position = d1;
-  position = position << 8;
-  
-  position |= d2;
-  position = position >> 4;
-  
-  if (!(d2 & B00001000)) {
-    OCF = true;
+  for(int i = 0; i < 8; i++) {
+    parityCount += bitRead(d1,i);
+    parityCount += bitRead(d2,i);
+    if(i > 5) {
+      parityCount += bitRead(d3,i);
+    }
   }
-  
-  if (!(d2 & B00000100)) {
-    COF = true;
+
+  if((parityCount % 2) == 0) {
+    
+    //get our position variable
+    position = d1;
+    position = position << 8;
+    
+    position |= d2;
+    position = position >> 4;
+    
+    if (!(d2 & B00001000)) {
+      OCF = true;
+    }
+    
+    if (!(d2 & B00000100)) {
+      COF = true;
+    }
+    
+    LIN = bitRead(d2,1);
+    mINC = bitRead(d2,0);
+    mDEC = bitRead(d3,7);
+    
+    //determine magnetic signal strength
+    if(mINC == false && mDEC == false) { magStrength = I2C_MAG_SIG_GOOD;  }
+    if(mINC == true && mDEC == true && LIN == false) { magStrength = I2C_MAG_SIG_MID;  }
+    if(mINC == true && mDEC == true && LIN == true) { magStrength = I2C_MAG_SIG_BAD;  }
+  } else {
+    parityErrorCount++;
   }
-  
-  LIN = bitRead(d2,1);
-  mINC = bitRead(d2,0);
-  mDEC = bitRead(d3,7);
-  
-  //determine magnetic signal strength
-  if(mINC == false && mDEC == false) { magStrength = I2C_MAG_SIG_GOOD;  }
-  if(mINC == true && mDEC == true && LIN == false) { magStrength = I2C_MAG_SIG_MID;  }
-  if(mINC == true && mDEC == true && LIN == true) { magStrength = I2C_MAG_SIG_BAD;  }
 
   return position;
 }
@@ -457,28 +471,10 @@ void updateLeds() {
         }
         break;
       case 1:
-        //leds[i] = CRGB::White;
-        break;
-      case 2:
-        //leds[i] = CRGB::Red;
-        break;
-      case 3:
-        //leds[i] = CRGB::Green;
-        break;
-      case 4:
-        //leds[i] = CRGB::Blue;
+        //pixels.setPixelColor(i, WHITE);
         break;
       case 5:
-        //leds[i].setRGB(ledRGB[0],ledRGB[1],ledRGB[2]);
-        break;
-      case 6:
-        //leds[i].setHSV(ledHSV[0],ledHSV[1],ledHSV[2]);
-        break;
-      case 7:
-        //leds[i].setHSV(encoderCount.val/10*ledRate[i],255,255);
-        break;
-      case 8:
-        //leds[i].setHSV(millis()/1000*ledRate[i],255,255);
+        //pixels.setPixelColor(i,ledRGB[0],ledRGB[1],ledRGB[2]);
         break;
     }
     pixels.setPixelBrightness(i,ledBrightness[i]);
@@ -487,7 +483,7 @@ void updateLeds() {
 }
 
 void ledTest(int pixel) {
-  /*
+  
   pixels.setPixelColor(pixel,255,0,0);
   pixels.show();
   delay(500);
@@ -513,7 +509,7 @@ void ledTest(int pixel) {
     pixels.show();
     delay(10);
   }
-  */
+  
 }
 
 void blinkLeds(int times, const uint32_t rgb) {
@@ -541,27 +537,4 @@ void blinkLeds(int times, int duration, const uint32_t rgb) {
 //------------------------ MISC --------------------------//
 ////////////////////////////////////////////////////////////
 
-void watchResetPin() {
-  //check reset pin
-  if(digitalRead(DISABLE_PIN) == LOW) {
-    //crude debounce
-    delay(100);
-    if(digitalRead(DISABLE_PIN) == LOW) {
-      //blink LEDs, if still shorted after this reset
-      blinkLeds(5,WHITE);
-      if(digitalRead(DISABLE_PIN) == LOW) {
-        //reinitialize();
-        blinkLeds(1,GREEN);
-        restart();
-      }
-    }
-  }
-}
-
-//enable the watchdog timer and loop infinitely to trigger a reset
-void restart() {
-  delay(10);
-  //wdt_enable(WDTO_250MS);
-  for(;;);
-}
 
